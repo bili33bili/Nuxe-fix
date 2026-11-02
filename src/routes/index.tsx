@@ -1,10 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { ForgeApp } from "@/components/forge/ForgeApp";
 import { ForgeErrorBoundary } from "@/components/forge/ErrorBoundary";
+import { AuthGate } from "@/components/auth/AuthGate";
 
-const TITLE = "PROJECT FORGE — Pembangun Struktur Proyek & Ekspor ZIP";
+const TITLE = "Nuxe — Workspace Pengembangan";
 const DESC =
-  "Bangun struktur proyek, edit file, dan ekspor ZIP langsung di browser. Tanpa login, bisa offline. Proyek Anda. Struktur Anda. Aturan Anda.";
+  "Workspace pengembangan proyek untuk mengelola file, mengedit kode, menjalankan preview, dan mengekspor proyek.";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -22,8 +23,10 @@ export const Route = createFileRoute("/")({
 
 function Index() {
   return (
-    <ForgeErrorBoundary>
-      <ForgeApp />
-    </ForgeErrorBoundary>
+    <AuthGate>
+      <ForgeErrorBoundary>
+        <ForgeApp />
+      </ForgeErrorBoundary>
+    </AuthGate>
   );
 }
