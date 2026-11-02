@@ -38,11 +38,15 @@ export const Route = createFileRoute("/api/public/access")({
           const payload = (row.payload ?? null) as Payload;
           if (payload && Array.isArray(payload.files) && payload.files.length > 0) {
             // Serahkan proyek sekali, lalu tandai sudah dipakai.
-            await supabaseAdmin
+            const { data: consumed } = await supabaseAdmin
               .from("approval_requests")
               .update({ status: "used", payload: {}, pickup_hash: null })
               .eq("id", id)
-              .eq("status", "approved");
+              .eq("status", "approved")
+              .select("id")
+              .maybeSingle();
+            // Only the request that atomically consumes the approval may receive its payload.
+            if (!consumed) return json({ status: "delivered" });
             return json({ status: "approved", project: payload });
           }
           return json({ status: "approved", project: null });
