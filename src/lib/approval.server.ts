@@ -1,4 +1,10 @@
-export const OWNER_EMAIL = "devibili28@gmail.com";
+function getOwnerEmail() {
+  const email = process.env["APPROVAL_OWNER_EMAIL"]?.trim();
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error("APPROVAL_OWNER_EMAIL belum diatur dengan benar");
+  }
+  return email;
+}
 
 export async function sha256(s: string) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
@@ -22,10 +28,10 @@ const header = (v: string) => (/^[\x00-\x7F]*$/.test(v) ? v : `=?UTF-8?B?${b64(v
 
 export async function sendOwnerEmail(subject: string, html: string) {
   const lov = process.env["LOVABLE_API_KEY"];
-  const gm = process.env["GOOGLE_MAIL_API_KEY"];
+  const gm = process.env["GOOGLE_MAIL_API_KEY"];\n  const ownerEmail = getOwnerEmail();
   if (!lov || !gm) throw new Error("Gmail belum tersambung");
   const msg = [
-    `To: ${OWNER_EMAIL}`,
+    `To: ${ownerEmail}`,
     `Subject: ${header(subject)}`,
     "MIME-Version: 1.0",
     'Content-Type: text/html; charset="UTF-8"',
