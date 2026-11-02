@@ -68,7 +68,6 @@ type Theme = "dark" | "light";
 
 export function ForgeApp() {
   const eng = useEngine();
-  useEngine();
   const [booting, setBooting] = useState(true);
   const [theme, setTheme] = useState<Theme>("dark");
   const [tabs, setTabs] = useState<string[]>([]);

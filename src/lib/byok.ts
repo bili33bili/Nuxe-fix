@@ -1,7 +1,9 @@
 /**
  * Bring-your-own-key client (no Lovable AI involved).
- * The key comes from the project's .env (VITE_AI_API_KEY) or from the user's own
- * settings saved in this browser. Requests go straight to an OpenAI-compatible endpoint.
+ * Provider keys are kept in sessionStorage, not localStorage, so they are
+ * cleared when the browser tab/session ends. Browser storage is still
+ * accessible to same-origin JavaScript; never use this for high-value keys
+ * on a site where untrusted scripts can run.
  */
 
 export interface ByokSettings {
@@ -11,34 +13,53 @@ export interface ByokSettings {
 }
 
 const STORAGE_KEY = "forge.byok.v1";
+const LEGACY_STORAGE_KEY = STORAGE_KEY;
 
 const env = import.meta.env as Record<string, string | undefined>;
 
 export const envDefaults: ByokSettings = {
   baseUrl: env["VITE_AI_BASE_URL"] ?? "https://api.openai.com/v1",
   model: env["VITE_AI_MODEL"] ?? "gpt-4o-mini",
-  apiKey: env["VITE_AI_API_KEY"] ?? "",
+  // Do not inject VITE_AI_API_KEY into the browser bundle.
+  apiKey: "",
 };
 
+function parseSettings(raw: string): ByokSettings {
+  const parsed = JSON.parse(raw) as Partial<ByokSettings>;
+  return {
+    baseUrl: parsed.baseUrl?.trim() || envDefaults.baseUrl,
+    model: parsed.model?.trim() || envDefaults.model,
+    apiKey: parsed.apiKey?.trim() || "",
+  };
+}
+
 export function loadByok(): ByokSettings {
-  if (typeof localStorage === "undefined") return { ...envDefaults };
+  if (typeof window === "undefined") return { ...envDefaults };
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...envDefaults };
-    const parsed = JSON.parse(raw) as Partial<ByokSettings>;
-    return {
-      baseUrl: parsed.baseUrl?.trim() || envDefaults.baseUrl,
-      model: parsed.model?.trim() || envDefaults.model,
-      apiKey: parsed.apiKey?.trim() || envDefaults.apiKey,
-    };
+    const current = window.sessionStorage.getItem(STORAGE_KEY);
+    if (current) return parseSettings(current);
+
+    // One-time migration from the older persistent localStorage location.
+    const legacy = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (legacy) {
+      const settings = parseSettings(legacy);
+      window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+      return settings;
+    }
+    return { ...envDefaults };
   } catch {
     return { ...envDefaults };
   }
 }
 
 export function saveByok(settings: ByokSettings) {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    throw new Error("Tidak dapat menyimpan pengaturan AI di sesi browser ini.");
+  }
 }
 
 export function hasKey(settings: ByokSettings) {
