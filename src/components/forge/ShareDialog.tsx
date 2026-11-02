@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Radio, X, Send, Download, Copy, Loader2, Users, Link2 } from "lucide-react";
+import { Radio, X, Send, Download, Copy, Loader2, Users, Link2, CircleDot } from "lucide-react";
 import { engine } from "@/engine/projectEngine";
 
 type Notify = (type: "success" | "error" | "info", message: string) => void;
 type Peer = import("peerjs").default;
 type ShareTab = "send" | "receive" | "collab";
+
+type CollaboratorStatus = "online" | "away";
 
 interface Payload {
   kind: "project-forge-p2p";
@@ -18,6 +20,27 @@ interface CollaborationSnapshot {
   projectName: string;
   files: { path: string; content: string }[];
   folders: string[];
+}
+
+interface PresenceMessage {
+  type: "presence";
+  memberId: string;
+  name: string;
+  status: CollaboratorStatus;
+  lastSeen: number;
+}
+
+interface SyncRequestMessage {
+  type: "syncRequest";
+  memberId: string;
+  name: string;
+}
+
+interface Collaborator {
+  id: string;
+  name: string;
+  status: CollaboratorStatus;
+  lastSeen: number;
 }
 
 const PREFIX = "pforge-";
@@ -58,6 +81,24 @@ function validCollabSnapshot(d: unknown): d is CollaborationSnapshot {
   );
 }
 
+function isPresenceMessage(d: unknown): d is PresenceMessage {
+  if (!d || typeof d !== "object") return false;
+  const p = d as PresenceMessage;
+  return (
+    p.type === "presence" &&
+    typeof p.memberId === "string" &&
+    typeof p.name === "string" &&
+    (p.status === "online" || p.status === "away") &&
+    typeof p.lastSeen === "number"
+  );
+}
+
+function isSyncRequestMessage(d: unknown): d is SyncRequestMessage {
+  if (!d || typeof d !== "object") return false;
+  const p = d as SyncRequestMessage;
+  return p.type === "syncRequest" && typeof p.memberId === "string" && typeof p.name === "string";
+}
+
 function makeProjectSnapshot(): CollaborationSnapshot {
   return {
     type: "collab-snapshot",
@@ -65,6 +106,12 @@ function makeProjectSnapshot(): CollaborationSnapshot {
     files: engine.fileList(),
     folders: engine.folderList(),
   };
+}
+
+function upsertCollaborator(list: Collaborator[], member: Collaborator): Collaborator[] {
+  const next = list.filter((item) => item.id !== member.id);
+  next.push(member);
+  return next.sort((a, b) => b.lastSeen - a.lastSeen);
 }
 
 export function ShareDialog({
@@ -87,7 +134,7 @@ export function ShareDialog({
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState("");
   const [collabInput, setCollabInput] = useState("");
-  const [collabMembers, setCollabMembers] = useState<string[]>([]);
+  const [collabMembers, setCollabMembers] = useState<Collaborator[]>([]);
   const [collabLink, setCollabLink] = useState("");
   const peerRef = useRef<Peer | null>(null);
 
@@ -232,11 +279,18 @@ export function ShareDialog({
 
     const roomCode = shortCode();
     const snapshot = makeProjectSnapshot();
+    const host: Collaborator = {
+      id: "you",
+      name: "Anda",
+      status: "online",
+      lastSeen: Date.now(),
+    };
+
     const { default: PeerCls } = await import("peerjs");
     const peer = new PeerCls(COLLAB_PREFIX + roomCode);
     peerRef.current = peer;
     setCode(roomCode);
-    setCollabMembers(["Anda"]);
+    setCollabMembers([host]);
     setCollabLink(`${window.location.origin}/?kolab=${roomCode}`);
 
     peer.on("open", () => {
@@ -245,17 +299,48 @@ export function ShareDialog({
     });
 
     peer.on("connection", (conn) => {
-      const remote = conn.peer || "rekan";
-      setCollabMembers((prev) => [...new Set([...prev, remote])]);
-      setStatus(`Terhubung dengan ${remote}. Memperbarui data proyek…`);
+      const remoteId = conn.peer || "rekan";
+      const remoteMember: Collaborator = {
+        id: remoteId,
+        name: remoteId,
+        status: "online",
+        lastSeen: Date.now(),
+      };
+      setCollabMembers((prev) => upsertCollaborator(prev, remoteMember));
+      setStatus(`Terhubung dengan ${remoteId}. Memperbarui data proyek…`);
 
       conn.on("open", () => {
-        conn.send({ type: "presence", name: "Rekan" });
+        const presence: PresenceMessage = {
+          type: "presence",
+          memberId: host.id,
+          name: host.name,
+          status: host.status,
+          lastSeen: Date.now(),
+        };
+        conn.send(presence);
         conn.send(snapshot);
       });
 
       conn.on("data", (d) => {
-        if (d && typeof d === "object" && (d as { type?: string }).type === "syncRequest") {
+        if (isPresenceMessage(d)) {
+          setCollabMembers((prev) => upsertCollaborator(prev, {
+            id: d.memberId,
+            name: d.name,
+            status: d.status,
+            lastSeen: d.lastSeen,
+          }));
+          return;
+        }
+
+        if (isSyncRequestMessage(d)) {
+          const presence: PresenceMessage = {
+            type: "presence",
+            memberId: host.id,
+            name: host.name,
+            status: host.status,
+            lastSeen: Date.now(),
+          };
+          conn.send(presence);
           conn.send(snapshot);
         }
       });
@@ -276,9 +361,17 @@ export function ShareDialog({
     setBusy(true);
     setStatus("Menyambungkan ke room kolaborasi…");
 
+    const selfMember: Collaborator = {
+      id: `guest-${Date.now()}`,
+      name: "Anda",
+      status: "online",
+      lastSeen: Date.now(),
+    };
+
     const { default: PeerCls } = await import("peerjs");
     const peer = new PeerCls();
     peerRef.current = peer;
+    setCollabMembers([selfMember]);
     const timeout = setTimeout(() => {
       if (peerRef.current === peer) {
         notify("error", "Room tidak ditemukan atau host sedang tidak aktif.");
@@ -289,15 +382,36 @@ export function ShareDialog({
     peer.on("open", () => {
       const conn = peer.connect(COLLAB_PREFIX + room, { reliable: true });
       conn.on("open", () => {
-        conn.send({ type: "syncRequest", name: engine.meta?.name ?? "Project" });
+        const request: SyncRequestMessage = {
+          type: "syncRequest",
+          memberId: selfMember.id,
+          name: selfMember.name,
+        };
+        const presence: PresenceMessage = {
+          type: "presence",
+          memberId: selfMember.id,
+          name: selfMember.name,
+          status: selfMember.status,
+          lastSeen: selfMember.lastSeen,
+        };
+        conn.send(request);
+        conn.send(presence);
       });
+
       conn.on("data", async (d) => {
         clearTimeout(timeout);
+
+        if (isPresenceMessage(d)) {
+          setCollabMembers((prev) => upsertCollaborator(prev, {
+            id: d.memberId,
+            name: d.name,
+            status: d.status,
+            lastSeen: d.lastSeen,
+          }));
+          return;
+        }
+
         if (!validCollabSnapshot(d)) {
-          if (d && typeof d === "object" && (d as { type?: string }).type === "presence") {
-            setCollabMembers((prev) => [...new Set([...prev, "Host"])])
-            return;
-          }
           notify("error", "Data room kolaborasi tidak valid.");
           cleanup();
           return;
@@ -311,7 +425,12 @@ export function ShareDialog({
           ];
           await engine.createProject(`${d.projectName} (kolaborasi)`, items);
           await engine.flush();
-          setCollabMembers((prev) => [...new Set([...prev, "Host"])])
+          setCollabMembers((prev) => upsertCollaborator(prev, {
+            id: "host",
+            name: "Host",
+            status: "online",
+            lastSeen: Date.now(),
+          }));
           notify("success", `Room tersambung. Proyek kolaborasi ${d.projectName} berhasil dibuka.`);
           setTimeout(() => {
             cleanup();
@@ -368,7 +487,7 @@ export function ShareDialog({
         <div className="space-y-3 overflow-auto px-4 py-4 text-sm">
           <p className="text-xs text-muted-foreground">
             {tab === "collab"
-              ? "Buang room kolaborasi untuk berbagi proyek dengan teman. Kode dapat dipakai untuk join room dan menerima snapshot proyek secara real-time."
+              ? "Room kolaborasi untuk berbagi proyek dengan teman. Kode dapat dipakai untuk join room dan menerima snapshot proyek secara real-time."
               : "Berkas dikirim langsung dari perangkat ke perangkat, tanpa disimpan di server. Kedua perangkat harus online."}
           </p>
 
@@ -451,11 +570,17 @@ export function ShareDialog({
               {collabMembers.length > 0 && (
                 <div className="rounded-lg border border-border bg-muted/20 p-3">
                   <p className="mb-2 text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Anggota</p>
-                  <div className="flex flex-wrap gap-2 text-xs">
+                  <div className="space-y-2 text-xs">
                     {collabMembers.map((member) => (
-                      <span key={member} className="rounded-full border border-border bg-background px-2 py-1">
-                        {member}
-                      </span>
+                      <div key={member.id} className="flex items-center justify-between gap-2 rounded-md border border-border bg-background px-2 py-1.5">
+                        <span className="flex items-center gap-2">
+                          <CircleDot className={`size-2 ${member.status === "online" ? "fill-emerald-400 text-emerald-400" : "fill-amber-400 text-amber-400"}`} />
+                          {member.name}
+                        </span>
+                        <span className={`text-[10px] ${member.status === "online" ? "text-emerald-400" : "text-amber-400"}`}>
+                          {member.status === "online" ? "online" : "away"}
+                        </span>
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -469,4 +594,3 @@ export function ShareDialog({
     </div>
   );
 }
-
