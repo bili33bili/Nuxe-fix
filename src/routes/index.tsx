@@ -22,6 +22,8 @@ export const Route = createFileRoute("/")({
 });
 
 function Index() {
+  console.info("[Nuxe-fix] route / rendered");
+
   return (
     <AuthGate>
       <ForgeErrorBoundary>

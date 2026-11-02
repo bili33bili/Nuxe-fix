@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Radio, X, Send, Download, Copy, Loader2 } from "lucide-react";
+import { Radio, X, Send, Download, Copy, Loader2, Users, Link2, CircleDot } from "lucide-react";
 import { engine } from "@/engine/projectEngine";
 
 type Notify = (type: "success" | "error" | "info", message: string) => void;
 type Peer = import("peerjs").default;
+type ShareTab = "send" | "receive" | "collab";
+
+type CollaboratorStatus = "online" | "away";
 
 interface Payload {
   kind: "project-forge-p2p";
@@ -12,7 +15,36 @@ interface Payload {
   folders: string[];
 }
 
+interface CollaborationSnapshot {
+  type: "collab-snapshot";
+  projectName: string;
+  files: { path: string; content: string }[];
+  folders: string[];
+}
+
+interface PresenceMessage {
+  type: "presence";
+  memberId: string;
+  name: string;
+  status: CollaboratorStatus;
+  lastSeen: number;
+}
+
+interface SyncRequestMessage {
+  type: "syncRequest";
+  memberId: string;
+  name: string;
+}
+
+interface Collaborator {
+  id: string;
+  name: string;
+  status: CollaboratorStatus;
+  lastSeen: number;
+}
+
 const PREFIX = "pforge-";
+const COLLAB_PREFIX = "pforge-collab-";
 const MAX_FILES = 20000;
 
 function shortCode() {
@@ -36,13 +68,74 @@ function validPayload(d: unknown): d is Payload {
   );
 }
 
-export function ShareDialog({ open, onClose, notify, beforeSend }: { open: boolean; onClose: () => void; notify: Notify; beforeSend?: () => Promise<void> }) {
-  const [tab, setTab] = useState<"send" | "receive">("send");
+function validCollabSnapshot(d: unknown): d is CollaborationSnapshot {
+  if (!d || typeof d !== "object") return false;
+  const p = d as CollaborationSnapshot;
+  return (
+    p.type === "collab-snapshot" &&
+    typeof p.projectName === "string" &&
+    Array.isArray(p.files) &&
+    p.files.every((f) => f && typeof f.path === "string" && typeof f.content === "string") &&
+    Array.isArray(p.folders) &&
+    p.folders.every((f) => typeof f === "string")
+  );
+}
+
+function isPresenceMessage(d: unknown): d is PresenceMessage {
+  if (!d || typeof d !== "object") return false;
+  const p = d as PresenceMessage;
+  return (
+    p.type === "presence" &&
+    typeof p.memberId === "string" &&
+    typeof p.name === "string" &&
+    (p.status === "online" || p.status === "away") &&
+    typeof p.lastSeen === "number"
+  );
+}
+
+function isSyncRequestMessage(d: unknown): d is SyncRequestMessage {
+  if (!d || typeof d !== "object") return false;
+  const p = d as SyncRequestMessage;
+  return p.type === "syncRequest" && typeof p.memberId === "string" && typeof p.name === "string";
+}
+
+function makeProjectSnapshot(): CollaborationSnapshot {
+  return {
+    type: "collab-snapshot",
+    projectName: engine.meta?.name ?? "Project Forger",
+    files: engine.fileList(),
+    folders: engine.folderList(),
+  };
+}
+
+function upsertCollaborator(list: Collaborator[], member: Collaborator): Collaborator[] {
+  const next = list.filter((item) => item.id !== member.id);
+  next.push(member);
+  return next.sort((a, b) => b.lastSeen - a.lastSeen);
+}
+
+export function ShareDialog({
+  open,
+  onClose,
+  notify,
+  beforeSend,
+  defaultTab = "send",
+}: {
+  open: boolean;
+  onClose: () => void;
+  notify: Notify;
+  beforeSend?: () => Promise<void>;
+  defaultTab?: ShareTab;
+}) {
+  const [tab, setTab] = useState<ShareTab>(defaultTab);
   const [code, setCode] = useState("");
   const [qr, setQr] = useState("");
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState("");
+  const [collabInput, setCollabInput] = useState("");
+  const [collabMembers, setCollabMembers] = useState<Collaborator[]>([]);
+  const [collabLink, setCollabLink] = useState("");
   const peerRef = useRef<Peer | null>(null);
 
   const cleanup = () => {
@@ -52,22 +145,32 @@ export function ShareDialog({ open, onClose, notify, beforeSend }: { open: boole
     setQr("");
     setStatus("");
     setBusy(false);
+    setCollabMembers([]);
+    setCollabLink("");
   };
 
   useEffect(() => {
-    if (!open) cleanup();
-    return () => cleanup();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+    if (!open) {
+      cleanup();
+      return;
+    }
 
-  useEffect(() => {
-    if (!open) return;
+    setTab(defaultTab);
     const fromUrl = new URLSearchParams(window.location.search).get("terima");
+    const fromCollabUrl = new URLSearchParams(window.location.search).get("kolab");
+
     if (fromUrl) {
       setTab("receive");
       setInput(fromUrl.toUpperCase());
     }
-  }, [open]);
+    if (fromCollabUrl) {
+      setTab("collab");
+      setCollabInput(fromCollabUrl.toUpperCase());
+    }
+
+    return () => cleanup();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, defaultTab]);
 
   async function startSend() {
     const meta = engine.meta;
@@ -165,6 +268,188 @@ export function ShareDialog({ open, onClose, notify, beforeSend }: { open: boole
     });
   }
 
+  async function startCollabHost() {
+    const meta = engine.meta;
+    if (!meta) return notify("error", "Buka proyek dulu sebelum membuat room kolaborasi.");
+
+    cleanup();
+    setBusy(true);
+    setStatus("Membuat room kolaborasi…");
+    await beforeSend?.();
+
+    const roomCode = shortCode();
+    const snapshot = makeProjectSnapshot();
+    const host: Collaborator = {
+      id: "you",
+      name: "Anda",
+      status: "online",
+      lastSeen: Date.now(),
+    };
+
+    const { default: PeerCls } = await import("peerjs");
+    const peer = new PeerCls(COLLAB_PREFIX + roomCode);
+    peerRef.current = peer;
+    setCode(roomCode);
+    setCollabMembers([host]);
+    setCollabLink(`${window.location.origin}/?kolab=${roomCode}`);
+
+    peer.on("open", () => {
+      setBusy(false);
+      setStatus("Room siap. Bagikan kode atau link untuk mengundang teman.");
+    });
+
+    peer.on("connection", (conn) => {
+      const remoteId = conn.peer || "rekan";
+      const remoteMember: Collaborator = {
+        id: remoteId,
+        name: remoteId,
+        status: "online",
+        lastSeen: Date.now(),
+      };
+      setCollabMembers((prev) => upsertCollaborator(prev, remoteMember));
+      setStatus(`Terhubung dengan ${remoteId}. Memperbarui data proyek…`);
+
+      conn.on("open", () => {
+        const presence: PresenceMessage = {
+          type: "presence",
+          memberId: host.id,
+          name: host.name,
+          status: host.status,
+          lastSeen: Date.now(),
+        };
+        conn.send(presence);
+        conn.send(snapshot);
+      });
+
+      conn.on("data", (d) => {
+        if (isPresenceMessage(d)) {
+          setCollabMembers((prev) => upsertCollaborator(prev, {
+            id: d.memberId,
+            name: d.name,
+            status: d.status,
+            lastSeen: d.lastSeen,
+          }));
+          return;
+        }
+
+        if (isSyncRequestMessage(d)) {
+          const presence: PresenceMessage = {
+            type: "presence",
+            memberId: host.id,
+            name: host.name,
+            status: host.status,
+            lastSeen: Date.now(),
+          };
+          conn.send(presence);
+          conn.send(snapshot);
+        }
+      });
+    });
+
+    peer.on("error", (e) => {
+      setBusy(false);
+      setStatus("");
+      notify("error", `Room kolaborasi gagal dibuat: ${e.type}`);
+    });
+  }
+
+  async function joinCollabRoom() {
+    const room = collabInput.trim().toUpperCase();
+    if (!/^[A-Z0-9]{6}$/.test(room)) return notify("error", "Kode room harus 6 huruf/angka.");
+
+    cleanup();
+    setBusy(true);
+    setStatus("Menyambungkan ke room kolaborasi…");
+
+    const selfMember: Collaborator = {
+      id: `guest-${Date.now()}`,
+      name: "Anda",
+      status: "online",
+      lastSeen: Date.now(),
+    };
+
+    const { default: PeerCls } = await import("peerjs");
+    const peer = new PeerCls();
+    peerRef.current = peer;
+    setCollabMembers([selfMember]);
+    const timeout = setTimeout(() => {
+      if (peerRef.current === peer) {
+        notify("error", "Room tidak ditemukan atau host sedang tidak aktif.");
+        cleanup();
+      }
+    }, 20000);
+
+    peer.on("open", () => {
+      const conn = peer.connect(COLLAB_PREFIX + room, { reliable: true });
+      conn.on("open", () => {
+        const request: SyncRequestMessage = {
+          type: "syncRequest",
+          memberId: selfMember.id,
+          name: selfMember.name,
+        };
+        const presence: PresenceMessage = {
+          type: "presence",
+          memberId: selfMember.id,
+          name: selfMember.name,
+          status: selfMember.status,
+          lastSeen: selfMember.lastSeen,
+        };
+        conn.send(request);
+        conn.send(presence);
+      });
+
+      conn.on("data", async (d) => {
+        clearTimeout(timeout);
+
+        if (isPresenceMessage(d)) {
+          setCollabMembers((prev) => upsertCollaborator(prev, {
+            id: d.memberId,
+            name: d.name,
+            status: d.status,
+            lastSeen: d.lastSeen,
+          }));
+          return;
+        }
+
+        if (!validCollabSnapshot(d)) {
+          notify("error", "Data room kolaborasi tidak valid.");
+          cleanup();
+          return;
+        }
+
+        try {
+          setStatus("Menerima snapshot proyek dari room…");
+          const items = [
+            ...d.folders.map((f) => ({ path: f.replace(/\/?$/, "/") })),
+            ...d.files.map((f) => ({ path: f.path, content: f.content })),
+          ];
+          await engine.createProject(`${d.projectName} (kolaborasi)`, items);
+          await engine.flush();
+          setCollabMembers((prev) => upsertCollaborator(prev, {
+            id: "host",
+            name: "Host",
+            status: "online",
+            lastSeen: Date.now(),
+          }));
+          notify("success", `Room tersambung. Proyek kolaborasi ${d.projectName} berhasil dibuka.`);
+          setTimeout(() => {
+            cleanup();
+            onClose();
+          }, 400);
+        } catch (e) {
+          notify("error", `Gagal membuka proyek kolaborasi: ${(e as Error).message}`);
+          cleanup();
+        }
+      });
+    });
+
+    peer.on("error", (e) => {
+      clearTimeout(timeout);
+      notify("error", e.type === "peer-unavailable" ? "Room kolaborasi tidak tersedia." : `Gagal: ${e.type}`);
+      cleanup();
+    });
+  }
+
   if (!open) return null;
 
   return (
@@ -177,13 +462,14 @@ export function ShareDialog({ open, onClose, notify, beforeSend }: { open: boole
       >
         <header className="flex items-center gap-2 border-b border-border px-4 py-3">
           <Radio className="size-4 text-primary" />
-          <h2 className="text-sm font-semibold">Kirim antar perangkat (P2P)</h2>
+          <h2 className="text-sm font-semibold">Kirim antar perangkat / Kolaborasi</h2>
           <button className="ml-auto rounded p-1 hover:bg-muted" aria-label="Tutup" onClick={onClose}>
             <X className="size-4" />
           </button>
         </header>
+
         <div className="flex gap-1 border-b border-border p-2">
-          {(["send", "receive"] as const).map((t) => (
+          {(["send", "receive", "collab"] as const).map((t) => (
             <button
               key={t}
               onClick={() => {
@@ -192,15 +478,19 @@ export function ShareDialog({ open, onClose, notify, beforeSend }: { open: boole
               }}
               className={`btn-forge flex-1 justify-center ${tab === t ? "btn-primary-forge" : "btn-ghost-forge"}`}
             >
-              {t === "send" ? <Send className="size-4" /> : <Download className="size-4" />}
-              {t === "send" ? "Kirim" : "Terima"}
+              {t === "send" ? <Send className="size-4" /> : t === "receive" ? <Download className="size-4" /> : <Users className="size-4" />}
+              {t === "send" ? "Kirim" : t === "receive" ? "Terima" : "Kolab"}
             </button>
           ))}
         </div>
+
         <div className="space-y-3 overflow-auto px-4 py-4 text-sm">
           <p className="text-xs text-muted-foreground">
-            Berkas dikirim langsung dari perangkat ke perangkat, tanpa disimpan di server. Kedua perangkat harus online.
+            {tab === "collab"
+              ? "Room kolaborasi untuk berbagi proyek dengan teman. Kode dapat dipakai untuk join room dan menerima snapshot proyek secara real-time."
+              : "Berkas dikirim langsung dari perangkat ke perangkat, tanpa disimpan di server. Kedua perangkat harus online."}
           </p>
+
           {tab === "send" ? (
             <>
               {!code && (
@@ -225,7 +515,7 @@ export function ShareDialog({ open, onClose, notify, beforeSend }: { open: boole
                 </div>
               )}
             </>
-          ) : (
+          ) : tab === "receive" ? (
             <>
               <input
                 className="input-forge text-center font-mono text-lg uppercase tracking-[0.3em]"
@@ -239,7 +529,65 @@ export function ShareDialog({ open, onClose, notify, beforeSend }: { open: boole
                 {busy ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />} Terima proyek
               </button>
             </>
+          ) : (
+            <>
+              <div className="flex gap-2">
+                <button className="btn-forge btn-primary-forge flex-1 justify-center" disabled={busy} onClick={() => void startCollabHost()}>
+                  {busy && !code ? <Loader2 className="size-4 animate-spin" /> : <Users className="size-4" />} Buat room
+                </button>
+              </div>
+
+              <input
+                className="input-forge text-center font-mono text-lg uppercase tracking-[0.3em]"
+                value={collabInput}
+                maxLength={6}
+                onChange={(e) => setCollabInput(e.target.value.toUpperCase())}
+                placeholder="KODE ROOM"
+                aria-label="Kode room kolaborasi"
+              />
+              <button className="btn-forge btn-ghost-forge w-full justify-center" disabled={busy} onClick={() => void joinCollabRoom()}>
+                {busy ? <Loader2 className="size-4 animate-spin" /> : <Users className="size-4" />} Gabung room
+              </button>
+
+              {code && (
+                <div className="rounded-lg border border-border bg-muted/30 p-3">
+                  <p className="mb-2 text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Room aktif</p>
+                  <div className="font-mono text-2xl font-bold tracking-[0.25em] text-primary">{code}</div>
+                  {collabLink && (
+                    <button
+                      className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md border border-border bg-background px-2 py-2 text-xs"
+                      onClick={() => {
+                        void navigator.clipboard?.writeText(collabLink);
+                        notify("info", "Link room disalin.");
+                      }}
+                    >
+                      <Link2 className="size-3.5" /> Salin link undangan
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {collabMembers.length > 0 && (
+                <div className="rounded-lg border border-border bg-muted/20 p-3">
+                  <p className="mb-2 text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Anggota</p>
+                  <div className="space-y-2 text-xs">
+                    {collabMembers.map((member) => (
+                      <div key={member.id} className="flex items-center justify-between gap-2 rounded-md border border-border bg-background px-2 py-1.5">
+                        <span className="flex items-center gap-2">
+                          <CircleDot className={`size-2 ${member.status === "online" ? "fill-emerald-400 text-emerald-400" : "fill-amber-400 text-amber-400"}`} />
+                          {member.name}
+                        </span>
+                        <span className={`text-[10px] ${member.status === "online" ? "text-emerald-400" : "text-amber-400"}`}>
+                          {member.status === "online" ? "online" : "away"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
           )}
+
           {status && <p className="text-center text-xs text-muted-foreground" aria-live="polite">{status}</p>}
         </div>
       </div>
