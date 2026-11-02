@@ -12,7 +12,7 @@ def safe(n):return re.sub(r"[^A-Za-z0-9._ -]","_",n)[:80] or "proyek"
 class H(http.server.BaseHTTPRequestHandler):
  def h(s,c=200,b=None):
   s.send_response(c)
-  for k,v in [("Access-Control-Allow-Origin","http://127.0.0.1"),("Access-Control-Allow-Headers","Authorization,Content-Type"),("Access-Control-Allow-Methods","GET,POST,OPTIONS"),("Access-Control-Allow-Private-Network","true"),("Content-Type","application/json")]:s.send_header(k,v)
+  for k,v in [("Access-Control-Allow-Origin","*"),("Access-Control-Allow-Headers","Authorization,Content-Type"),("Access-Control-Allow-Methods","GET,POST,OPTIONS"),("Access-Control-Allow-Private-Network","true"),("Content-Type","application/json")]:s.send_header(k,v)
   s.end_headers()
   if b is not None:s.wfile.write(json.dumps(b).encode())
  def ok(s):
