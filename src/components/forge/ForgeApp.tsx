@@ -23,6 +23,7 @@ import {
   X,
   Eye,
   Database,
+  Users,
 } from "lucide-react";
 import { engine } from "@/engine/projectEngine";
 import { useEngine } from "@/hooks/useEngine";
@@ -65,6 +66,7 @@ type Dialog =
   | null;
 
 type Theme = "dark" | "light";
+type ShareTab = "send" | "receive" | "collab";
 
 export function ForgeApp() {
   const eng = useEngine();
@@ -82,6 +84,7 @@ export function ForgeApp() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [shareTab, setShareTab] = useState<ShareTab>("send");
   const [menu, setMenu] = useState<{ node: ProjectNode | null; x: number; y: number } | null>(null);
   const [zip, setZip] = useState<{ label: string; p: ZipProgress } | null>(null);
   const [fillOpen, setFillOpen] = useState(false);
@@ -279,7 +282,7 @@ export function ForgeApp() {
     });
     try {
       const blob = await buildZip(
-        engine.meta.name.replace(/[\\/:*?"<>|]/g, "-"),
+        engine.meta.name.replace(/[\\/:*?\"<>|]/g, "-"),
         files,
         folders,
         (p) => setZip((z) => (z ? { ...z, p } : z)),
@@ -288,7 +291,7 @@ export function ForgeApp() {
       if (!blob) {
         notify("info", "ZIP dibatalkan");
       } else {
-        downloadBlob(blob, `${engine.meta.name.replace(/[\\/:*?"<>|]/g, "-")}.zip`);
+        downloadBlob(blob, `${engine.meta.name.replace(/[\\/:*?\"<>|]/g, "-")}.zip`);
         notify("success", "ZIP siap");
       }
     } catch (e) {
@@ -423,7 +426,8 @@ export function ForgeApp() {
       { id: "np", group: "Proyek", label: "Proyek Baru", run: () => setDialog({ kind: "newProject" }) },
       { id: "gmail", group: "Transfer", label: "Kirim ke web lain (persetujuan Gmail)", run: () => setApprovalOpen(true) },
       { id: "termux", group: "Transfer", label: "Database Termux (kirim/ambil)", run: () => setTermuxOpen(true) },
-      { id: "p2p", group: "Transfer", label: "Kirim / Terima P2P", run: () => setShareOpen(true) },
+      { id: "p2p", group: "Transfer", label: "Kirim / Terima P2P", run: () => { setShareTab("send"); setShareOpen(true); } },
+      { id: "collab", group: "Transfer", label: "Room Kolaborasi", run: () => { setShareTab("collab"); setShareOpen(true); } },
       { id: "lib", group: "Proyek", label: "Pustaka Proyek", run: () => setLibraryOpen(true) },
       {
         id: "rnp",
@@ -662,7 +666,26 @@ export function ForgeApp() {
               <button className="btn-forge btn-ghost-forge" onClick={() => setApprovalOpen(true)} aria-label="Kirim dengan persetujuan Gmail" title="Kirim ke web lain (persetujuan Gmail)">
                 <Mail className="size-4" /> <span className="hidden sm:inline">Gmail</span>
               </button>
-              <button className="btn-forge btn-ghost-forge" onClick={() => setShareOpen(true)} aria-label="Kirim P2P">
+              <button
+                className="btn-forge btn-ghost-forge"
+                onClick={() => {
+                  setShareTab("collab");
+                  setShareOpen(true);
+                }}
+                aria-label="Kolaborasi room"
+                title="Room kolaborasi"
+              >
+                <Users className="size-4" /> <span className="hidden sm:inline">Kolab</span>
+              </button>
+              <button
+                className="btn-forge btn-ghost-forge"
+                onClick={() => {
+                  setShareTab("send");
+                  setShareOpen(true);
+                }}
+                aria-label="Kirim P2P"
+                title="Kirim antar perangkat"
+              >
                 <Radio className="size-4" /> <span className="hidden sm:inline">P2P</span>
               </button>
               <button className="btn-forge btn-ghost-forge text-primary" onClick={() => setPreviewOpen(true)} aria-label="Preview" title="Preview interaktif (sandbox)">
@@ -700,15 +723,13 @@ export function ForgeApp() {
       <FillAllDialog open={fillOpen} onClose={() => setFillOpen(false)} notify={notify} />
       <TermuxDialog open={termuxOpen} onClose={() => setTermuxOpen(false)} notify={notify} beforeSend={async () => { for (const id of dirty) flushBuffer(id); await engine.flush(); }} />
       <ApprovalDialog open={approvalOpen} onClose={() => setApprovalOpen(false)} notify={notify} beforeSend={async () => { for (const id of dirty) flushBuffer(id); await engine.flush(); }} />
-      <ShareDialog open={shareOpen} onClose={() => setShareOpen(false)} notify={notify} beforeSend={async () => { for (const id of dirty) flushBuffer(id); await engine.flush(); }} />
+      <ShareDialog open={shareOpen} onClose={() => setShareOpen(false)} notify={notify} beforeSend={async () => { for (const id of dirty) flushBuffer(id); await engine.flush(); }} defaultTab={shareTab} />
       <PreviewPanel
         open={previewOpen}
         onClose={() => setPreviewOpen(false)}
         beforeOpen={() => { for (const id of dirty) flushBuffer(id); }}
         preferPath={activeTab ? engine.pathOf(activeTab) : null}
       />
-
-
 
       {!engine.meta ? (
         <Welcome
