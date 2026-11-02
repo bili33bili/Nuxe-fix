@@ -28,7 +28,8 @@ const header = (v: string) => (/^[\x00-\x7F]*$/.test(v) ? v : `=?UTF-8?B?${b64(v
 
 export async function sendOwnerEmail(subject: string, html: string) {
   const lov = process.env["LOVABLE_API_KEY"];
-  const gm = process.env["GOOGLE_MAIL_API_KEY"];\n  const ownerEmail = getOwnerEmail();
+  const gm = process.env["GOOGLE_MAIL_API_KEY"];
+  const ownerEmail = getOwnerEmail();
   if (!lov || !gm) throw new Error("Gmail belum tersambung");
   const msg = [
     `To: ${ownerEmail}`,
