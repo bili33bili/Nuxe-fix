@@ -6,16 +6,17 @@ const KEY = "forge.termux.v1";
 
 const SERVER_PY = `import http.server,json,os,re
 R=os.path.expanduser("~/forge");os.makedirs(R,exist_ok=True)
-T=os.environ.get("FORGE_KEY","")
+T=os.environ.get("FORGE_KEY","").strip()
+if not T: raise SystemExit("Atur FORGE_KEY terlebih dahulu.")
 def safe(n):return re.sub(r"[^A-Za-z0-9._ -]","_",n)[:80] or "proyek"
 class H(http.server.BaseHTTPRequestHandler):
  def h(s,c=200,b=None):
   s.send_response(c)
-  for k,v in [("Access-Control-Allow-Origin","*"),("Access-Control-Allow-Headers","*"),("Access-Control-Allow-Methods","GET,POST,OPTIONS"),("Access-Control-Allow-Private-Network","true"),("Content-Type","application/json")]:s.send_header(k,v)
+  for k,v in [("Access-Control-Allow-Origin","http://127.0.0.1"),("Access-Control-Allow-Headers","Authorization,Content-Type"),("Access-Control-Allow-Methods","GET,POST,OPTIONS"),("Access-Control-Allow-Private-Network","true"),("Content-Type","application/json")]:s.send_header(k,v)
   s.end_headers()
   if b is not None:s.wfile.write(json.dumps(b).encode())
  def ok(s):
-  if T and s.headers.get("Authorization")!="Bearer "+T:s.h(401,{"error":"Kunci salah"});return False
+  if s.headers.get("Authorization")!="Bearer "+T:s.h(401,{"error":"Kunci salah"});return False
   return True
  def do_OPTIONS(s):s.h(204)
  def do_GET(s):
@@ -34,14 +35,14 @@ class H(http.server.BaseHTTPRequestHandler):
   for f in d.get("folders",[]):os.makedirs(os.path.join(base,f.strip("/")),exist_ok=True)
   for f in d.get("files",[]):
    q=os.path.normpath(os.path.join(base,f["path"].lstrip("/")))
-   if not q.startswith(base):continue
+   if os.path.commonpath((os.path.realpath(base),os.path.realpath(q)))!=os.path.realpath(base):continue
    os.makedirs(os.path.dirname(q),exist_ok=True);open(q,"w").write(f.get("content") or "")
   s.h(200,{"ok":True,"name":n})
 print("Forge server: http://127.0.0.1:8765  folder:",R)
-http.server.ThreadingHTTPServer(("0.0.0.0",8765),H).serve_forever()
+http.server.ThreadingHTTPServer(("127.0.0.1",8765),H).serve_forever()
 `;
 
-const INSTALL = `pkg install -y python && cat > ~/forge-server.py <<'EOF'\n${SERVER_PY}EOF\npython ~/forge-server.py`;
+const INSTALL = `pkg install -y python && export FORGE_KEY="$(python -c "import secrets; print(secrets.token_urlsafe(32))")" && echo "Simpan kunci ini: $FORGE_KEY" && cat > ~/forge-server.py <<'EOF'\n${SERVER_PY}EOF\npython ~/forge-server.py`;
 
 type P = { name: string; files: { path: string; content: string }[]; folders: string[] };
 
@@ -57,12 +58,12 @@ export function TermuxDialog({ open, onClose, notify, beforeSend }: {
 
   useEffect(() => {
     if (!open) return;
-    try { const s = JSON.parse(localStorage.getItem(KEY) ?? "{}"); if (s.url) setUrl(s.url); if (s.key) setKey(s.key); } catch { /* */ }
+    try { const s = JSON.parse(sessionStorage.getItem(KEY) ?? "{}"); if (s.url) setUrl(s.url); if (s.key) setKey(s.key); } catch { /* */ }
   }, [open]);
   if (!open) return null;
 
   const call = async (path: string, init?: RequestInit) => {
-    localStorage.setItem(KEY, JSON.stringify({ url, key }));
+    sessionStorage.setItem(KEY, JSON.stringify({ url, key }));
     const res = await fetch(url.replace(/\/+$/, "") + path, {
       ...init, headers: { "Content-Type": "application/json", ...(key ? { Authorization: `Bearer ${key}` } : {}) },
     }).catch(() => { throw new Error("Server Termux tidak terjangkau. Pastikan sudah dijalankan."); });
