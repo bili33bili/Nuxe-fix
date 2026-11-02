@@ -1,10 +1,12 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { z } from "zod";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
 const MAX_PAYLOAD = 4_000_000;
 
 export const requestApproval = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((d) =>
     z
       .object({
@@ -49,6 +51,7 @@ export const requestApproval = createServerFn({ method: "POST" })
   });
 
 export const checkApproval = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((d) => z.object({ id: z.string().uuid(), poll: z.string().min(10).max(100) }).parse(d))
   .handler(async ({ data }) => {
     const { sha256, shortCode } = await import("./approval.server");
