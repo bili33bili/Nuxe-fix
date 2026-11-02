@@ -99,6 +99,7 @@ export function PreviewPanel({ open, onClose, beforeOpen, preferPath }: {
   preferPath: string | null;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const [entry, setEntry] = useState<string | null>(null);
   const [pages, setPages] = useState<string[]>([]);
   const [doc, setDoc] = useState("");
@@ -136,6 +137,8 @@ export function PreviewPanel({ open, onClose, beforeOpen, preferPath }: {
   useEffect(() => {
     if (!open) return;
     const onMsg = (e: MessageEvent) => {
+      // Accept preview bridge messages only from this sandbox iframe.
+      if (e.source !== iframeRef.current?.contentWindow) return;
       const d = e.data as { forgePreview?: string; href?: string; message?: string };
       if (d?.forgePreview === "nav" && d.href && entry) {
         const p = resolve(entry, d.href);
@@ -202,6 +205,7 @@ export function PreviewPanel({ open, onClose, beforeOpen, preferPath }: {
         <div className="relative min-h-0 flex-1 bg-white">
           {entry ? (
             <iframe
+              ref={iframeRef}
               key={nonce}
               title="Preview proyek"
               srcDoc={doc}

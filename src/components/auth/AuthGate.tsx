@@ -1,10 +1,11 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 
 type AuthMode = "login" | "signup";
 
 export function AuthGate({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<any>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [checking, setChecking] = useState(true);
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
